@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>블레스 치과 관리 시스템</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <style>
+    * { font-family: 'Outfit', sans-serif; margin: 0; padding: 0; box-sizing: border-box; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    body { margin: 0; padding: 0; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .slide-in { animation: slideIn 0.3s ease-out forwards; }
+    .fade-in { animation: fadeIn 0.4s ease-out; }
+    input[type="date"].date-input:not(:focus) { color: transparent; }
+    input[type="checkbox"] { accent-color: #10b981; cursor: pointer; }
+    input[type="checkbox"]:hover { transform: scale(1.1); }
+    td input[type="text"], td input[type="date"] { background: transparent; transition: all 0.2s ease; }
+    td input[type="text"]:hover, td input[type="date"]:hover { background: white; }
+    td input[type="text"]:focus, td input[type="date"]:focus { background: white; transform: scale(1.01); }
+    table { border-collapse: separate; border-spacing: 0; }
+    tbody tr { transition: all 0.2s ease; }
+    tbody tr:hover { background: rgba(59, 130, 246, 0.05); }
+    tbody tr:last-child { border-bottom: none; }
+    td, th { white-space: nowrap; }
+    td input { white-space: normal; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Firestore REST API 설정
+    const FIREBASE_CONFIG = {
+      projectId: 'bless-dental',
+      apiKey: 'AIzaSyDMr4JlL_L7TmOT6r9_W2UDVHVhN6jDSTA'
+    };
+
+    const FIRESTORE_URL = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
+
+    // Firestore 헬퍼 함수
+    const firestoreHelpers = {
+      async getDocument(collection, docId) {
+        try {
+          const response = await fetch(`${FIRESTORE_URL}/${collection}/${docId}?key=${FIREBASE_CONFIG.apiKey}`);
+          if (response.status === 404) return null;
+          if (!response.ok) throw new Error('Failed to fetch');
+          const data = await response.json();
+          return data.fields?.data?.arrayValue?.values?.map(v => JSON.parse(v.stringValue)) || [];
+        } catch (error) {
+          console.error('Read error:', error);
+          return [];
+        }
+      },
+
+      async setDocument(collection, docId, data) {
+        try {
+          const firestoreData = {
+            fields: {
+              data: {
+                arrayValue: {
+                  values: data.map(item => ({ stringValue: JSON.stringify(item) }))
+                }
+              }
+            }
+          };
+
+          const response = await fetch(
+            `${FIRESTORE_URL}/${collection}/${docId}?key=${FIREBASE_CONFIG.apiKey}`,
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(firestoreData)
+            }
+          );
+
+          if (!response.ok) throw new Error('Failed to save');
+          return await response.json();
+        } catch (error) {
+          console.error('Write error:', error);
+          throw error;
+        }
+      }
+    };
+
+    // Icons (simplified)
+    const Search = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>;
+    const Plus = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14"/></svg>;
+    const Trash2 = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>;
+    const X = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>;
+
+    function DentalDashboard() {
+      const [searchTerm, setSearchTerm] = useState('');
+      const [isLoading, setIsLoading] = useState(true);
+      
+      const [labPatients, setLabPatients] = useState([]);
+      const [showLabForm, setShowLabForm] = useState(false);
+      const [labForm, setLabForm] = useState({ name: '', work: '', receiveDate: '', deadline: '' });
+
+      const [implantPatients, setImplantPatients] = useState([]);
+      const [showImplantForm, setShowImplantForm] = useState(false);
+      const [implantForm, setImplantForm] = useState({ name: '', statuses: [], extractionDate: '', surgeryDate: '' });
+
+      // 데이터 로드
+      useEffect(() => {
+        const loadData = async () => {
+          setIsLoading(true);
+          try {
+            const labData = await firestoreHelpers.getDocument('patients', 'labPatients');
+            if (labData && labData.length > 0) setLabPatients(labData);
+
+            const implantData = await firestoreHelpers.getDocument('patients', 'implantPatients');
+            if (implantData && implantData.length > 0) setImplantPatients(implantData);
+          } catch (error) {
+            console.error('데이터 로드 실패:', error);
+          } finally {
+            setIsLoading(false);
+          }
+        };
+        loadData();
+      }, []);
+
+      // 데이터 저장
+      useEffect(() => {
+        if (!isLoading && labPatients.length >= 0) {
+          firestoreHelpers.setDocument('patients', 'labPatients', labPatients);
+        }
+      }, [labPatients, isLoading]);
+
+      useEffect(() => {
+        if (!isLoading && implantPatients.length >= 0) {
+          firestoreHelpers.setDocument('patients', 'implantPatients', implantPatients);
+        }
+      }, [implantPatients, isLoading]);
+
+      // 계산 및 헬퍼 함수들
+      const calculateDaysLeft = (deadline) => {
+        if (!deadline) return null;
+        const today = new Date();
+        const deadlineDate = new Date(deadline);
+        const diffTime = deadlineDate - today;
+        return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      };
+
+      const daysLeftColor = (days) => {
+        if (days < 0) return '#dc2626';
+        if (days <= 3) return '#f97316';
+        if (days <= 7) return '#eab308';
+        return '#22c55e';
+      };
+
+      const statusColors = {
+        '문제': '#ef4444',
+        '고려(약속있음)': '#eab308',
+        '고려(약속없음)': '#f59e0b',
+        '수술예정': '#3b82f6',
+        '보철예정': '#a855f7',
+        '엔도': '#22c55e',
+        '크라운': '#ec4899',
+        '기공소': '#f97316'
+      };
+
+      const statusPriority = {
+        '문제': 1, '고려(약속있음)': 2, '고려(약속없음)': 3,
+        '수술예정': 4, '보철예정': 5, '엔도': 6, '크라운': 7, '기공소': 8
+      };
+
+      const getHighestPriorityStatus = (statuses) => {
+        if (!statuses || statuses.length === 0) return 999;
+        return Math.min(...statuses.map(s => statusPriority[s] || 999));
+      };
+
+      // CRUD 함수들
+      const addLabPatient = () => {
+        if (labForm.name && labForm.work && labForm.receiveDate && labForm.deadline) {
+          setLabPatients([...labPatients, { ...labForm, id: Date.now() }]);
+          setLabForm({ name: '', work: '', receiveDate: '', deadline: '' });
+          setShowLabForm(false);
+        }
+      };
+
+      const addImplantPatient = () => {
+        if (implantForm.name) {
+          setImplantPatients([...implantPatients, { ...implantForm, id: Date.now(), completed: false }]);
+          setImplantForm({ name: '', statuses: [], extractionDate: '', surgeryDate: '' });
+          setShowImplantForm(false);
+        }
+      };
+
+      const deleteLabPatient = (id) => setLabPatients(labPatients.filter(p => p.id !== id));
+      const deleteImplantPatient = (id) => setImplantPatients(implantPatients.filter(p => p.id !== id));
+
+      const updateLabPatientWork = (id, work) => setLabPatients(labPatients.map(p => p.id === id ? {...p, work} : p));
+      const updateLabPatientReceiveDate = (id, receiveDate) => setLabPatients(labPatients.map(p => p.id === id ? {...p, receiveDate} : p));
+      const updateLabPatientDeadline = (id, deadline) => setLabPatients(labPatients.map(p => p.id === id ? {...p, deadline} : p));
+
+      const updateImplantExtractionDate = (id, extractionDate) => setImplantPatients(implantPatients.map(p => p.id === id ? {...p, extractionDate} : p));
+      const updateImplantSurgeryDate = (id, surgeryDate) => setImplantPatients(implantPatients.map(p => p.id === id ? {...p, surgeryDate} : p));
+
+      const toggleImplantComplete = (id) => setImplantPatients(implantPatients.map(p => p.id === id ? {...p, completed: !p.completed} : p));
+
+      const removeImplantStatus = (id, status) => {
+        setImplantPatients(implantPatients.map(p => p.id === id ? {...p, statuses: p.statuses.filter(s => s !== status)} : p));
+      };
+
+      const addImplantStatus = (id, status) => {
+        setImplantPatients(implantPatients.map(p => p.id === id ? {...p, statuses: p.statuses.includes(status) ? p.statuses : [...p.statuses, status]} : p));
+        
+        if (status === '기공소') {
+          const patient = implantPatients.find(p => p.id === id);
+          if (patient) {
+            const today = new Date().toISOString().split('T')[0];
+            setLabPatients([...labPatients, { id: Date.now(), name: patient.name, work: '', receiveDate: today, deadline: '' }]);
+          }
+        }
+      };
+
+      const toggleImplantStatus = (status) => {
+        setImplantForm(prev => ({
+          ...prev,
+          statuses: prev.statuses.includes(status) ? prev.statuses.filter(s => s !== status) : [...prev.statuses, status]
+        }));
+      };
+
+      // 필터링 및 정렬
+      const filteredLabPatients = labPatients.filter(p =>
+        p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.work.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+
+      const filteredImplantPatients = implantPatients
+        .filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()))
+        .sort((a, b) => {
+          const priorityA = getHighestPriorityStatus(a.statuses);
+          const priorityB = getHighestPriorityStatus(b.statuses);
+          if (priorityA !== priorityB) return priorityA - priorityB;
+          return a.name.localeCompare(b.name, 'ko-KR');
+        });
+
+      return (
+        <div style={{minHeight: '100vh', background: 'linear-gradient(to bottom right, #f8fafc, #e0f2fe, #ccfbf1)'}}>
+          {isLoading && (
+            <div style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50}}>
+              <div style={{background: 'white', borderRadius: '1rem', padding: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem'}}>
+                <div style={{width: '3rem', height: '3rem', border: '4px solid #3b82f6', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite'}}></div>
+                <div style={{fontSize: '1.125rem', fontWeight: 600, color: '#334155'}}>데이터 로드 중...</div>
+              </div>
+            </div>
+          )}
+
+          {/* Header */}
+          <div style={{background: 'linear-gradient(to right, #2563eb, #0ea5e9, #14b8a6)', color: 'white', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)'}}>
+            <div style={{maxWidth: '80rem', margin: '0 auto', padding: '2rem 1.5rem'}}>
+              <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
+                <div>
+                  <h1 style={{fontSize: '2.25rem', fontWeight: 'bold', marginBottom: '0.5rem'}}>블레스 치과 관리 시스템</h1>
+                  <p style={{color: '#bfdbfe', fontSize: '1.125rem'}}>환자 몰입 보드</p>
+                </div>
+                <div style={{textAlign: 'right'}}>
+                  <div style={{fontSize: '0.875rem', color: '#bfdbfe', marginBottom: '0.5rem'}}>총 환자</div>
+                  <div className="mono" style={{fontSize: '1.875rem', fontWeight: 'bold', marginBottom: '0.75rem'}}>{labPatients.length + implantPatients.length}</div>
+                  <div style={{fontSize: '0.875rem', color: '#bfdbfe'}}>
+                    <div>🔬 기공소: {labPatients.length}명</div>
+                    <div>🦷 환자: {implantPatients.length}명</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Main Content */}
+          <div style={{maxWidth: '80rem', margin: '0 auto', padding: '2rem 1.5rem'}}>
+            {/* Search */}
+            <div style={{marginBottom: '2rem'}}>
+              <div style={{position: 'relative'}}>
+                <div style={{position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8'}}>
+                  <Search />
+                </div>
+                <input
+                  type="text"
+                  placeholder="환자명 또는 작업내용 검색..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  style={{width: '100%', padding: '0.75rem 1rem 0.75rem 3rem', borderRadius: '1rem', border: '2px solid #e2e8f0', fontSize: '1rem', outline: 'none'}}
+                />
+              </div>
+            </div>
+
+            {/* 기공소 작업 현황 */}
+            <div style={{background: 'white', borderRadius: '1.5rem', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)', marginBottom: '2rem', overflow: 'hidden'}} className="slide-in">
+              <div style={{background: 'linear-gradient(to right, #3b82f6, #60a5fa)', color: 'white', padding: '1.5rem'}}>
+                <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
+                  <h2 style={{fontSize: '1.5rem', fontWeight: 'bold'}}>🔬 기공소 작업 현황 ({filteredLabPatients.length})</h2>
+                  <button
+                    onClick={() => setShowLabForm(!showLabForm)}
+                    style={{background: 'white', color: '#3b82f6', padding: '0.5rem 1rem', borderRadius: '0.5rem', border: 'none', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem'}}
+                  >
+                    <Plus /> 신규 등록
+                  </button>
+                </div>
+              </div>
+
+              {showLabForm && (
+                <div style={{padding: '1.5rem', borderBottom: '1px solid #e2e8f0', background: '#f8fafc'}}>
+                  <div style={{display: 'grid', gap: '1rem'}}>
+                    <input
+                      type="text"
+                      placeholder="환자명"
+                      value={labForm.name}
+                      onChange={(e) => setLabForm({...labForm, name: e.target.value})}
+                      style={{padding: '0.75rem 1rem', borderRadius: '0.75rem', border: '2px solid #cbd5e1', outline: 'none'}}
+                    />
+                    <input
+                      type="text"
+                      placeholder="작업내용"
+                      value={labForm.work}
+                      onChange={(e) => setLabForm({...labForm, work: e.target.value})}
+                      style={{padding: '0.75rem 1rem', borderRadius: '0.75rem', border: '2px solid #cbd5e1', outline: 'none'}}
+                    />
+                    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem'}}>
+                      <div style={{position: 'relative'}}>
+                        <input
+                          type="date"
+                          value={labForm.receiveDate}
+                          onChange={(e) => setLabForm({...labForm, receiveDate: e.target.value})}
+                          className="date-input"
+                          style={{width: '100%', padding: '0.75rem 1rem', borderRadius: '0.75rem', border: '2px solid #cbd5e1', outline: 'none'}}
+                        />
+                        {!labForm.receiveDate && <div style={{position: 'absolute', inset: 0, padding: '0.75rem 1rem', pointerEvents: 'none', color: '#94a3b8'}}>접수일</div>}
+                        {labForm.receiveDate && <div className="mono" style={{position: 'absolute', inset: 0, padding: '0.75rem 1rem', pointerEvents: 'none', color: '#334155', background: 'transparent', fontSize: '0.875rem'}}>{labForm.receiveDate}</div>}
+                      </div>
+                      <div style={{position: 'relative'}}>
+                        <input
+                          type="date"
+                          value={labForm.deadline}
+                          onChange={(e) => setLabForm({...labForm, deadline: e.target.value})}
+                          className="date-input"
+                          style={{width: '100%', padding: '0.75rem 1rem', borderRadius: '0.75rem', border: '2px solid #cbd5e1', outline: 'none'}}
+                        />
+                        {!labForm.deadline && <div style={{position: 'absolute', inset: 0, padding: '0.75rem 1rem', pointerEvents: 'none', color: '#94a3b8'}}>마감일</div>}
+                        {labForm.deadline && <div className="mono" style={{position: 'absolute', inset: 0, padding: '0.75rem 1rem', pointerEvents: 'none', color: '#334155', background: 'transparent', fontSize: '0.875rem'}}>{labForm.deadline}</div>}
+                      </div>
+                    </div>
+                    <button
+                      onClick={addLabPatient}
+                      style={{padding: '0.75rem', borderRadius: '0.75rem', background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', fontWeight: 600}}
+                    >
+                      등록하기
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div style={{overflowX: 'auto'}}>
+                <table style={{width: '100%'}}>
+                  <thead>
+                    <tr style={{background: 'linear-gradient(to right, #3b82f6, #60a5fa)', color: 'white'}}>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'left', fontWeight: 600}}>환자명</th>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'left', fontWeight: 600}}>작업내용</th>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'left', fontWeight: 600}}>접수일</th>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'left', fontWeight: 600}}>마감일</th>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'left', fontWeight: 600}}>남은기간</th>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'center', fontWeight: 600}}>삭제</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredLabPatients.map(patient => {
+                      const daysLeft = calculateDaysLeft(patient.deadline);
+                      return (
+                        <tr key={patient.id} style={{borderBottom: '1px solid #e2e8f0'}}>
+                          <td style={{padding: '1rem 1.5rem', fontWeight: 'bold', color: '#1e293b'}}>{patient.name}</td>
+                          <td style={{padding: '1rem 1.5rem'}}>
+                            <input
+                              type="text"
+                              value={patient.work}
+                              onChange={(e) => updateLabPatientWork(patient.id, e.target.value)}
+                              placeholder="작업내용 입력"
+                              style={{width: '100%', padding: '0.375rem 0.75rem', borderRadius: '0.5rem', border: '1px solid #cbd5e1', outline: 'none'}}
+                            />
+                          </td>
+                          <td style={{padding: '1rem 1.5rem'}}>
+                            <div style={{position: 'relative'}}>
+                              <input
+                                type="date"
+                                value={patient.receiveDate}
+                                onChange={(e) => updateLabPatientReceiveDate(patient.id, e.target.value)}
+                                className="date-input"
+                                style={{width: '100%', padding: '0.375rem 0.75rem', borderRadius: '0.5rem', border: '1px solid #cbd5e1', outline: 'none'}}
+                              />
+                              {!patient.receiveDate && <div style={{position: 'absolute', inset: 0, padding: '0.375rem 0.75rem', pointerEvents: 'none', color: '#94a3b8', fontSize: '0.875rem'}}>접수일</div>}
+                              {patient.receiveDate && <div className="mono" style={{position: 'absolute', inset: 0, padding: '0.375rem 0.75rem', pointerEvents: 'none', color: '#334155', background: 'transparent', fontSize: '0.875rem'}}>{patient.receiveDate}</div>}
+                            </div>
+                          </td>
+                          <td style={{padding: '1rem 1.5rem'}}>
+                            <div style={{position: 'relative'}}>
+                              <input
+                                type="date"
+                                value={patient.deadline}
+                                onChange={(e) => updateLabPatientDeadline(patient.id, e.target.value)}
+                                className="date-input"
+                                style={{width: '100%', padding: '0.375rem 0.75rem', borderRadius: '0.5rem', border: '1px solid #cbd5e1', outline: 'none'}}
+                              />
+                              {!patient.deadline && <div style={{position: 'absolute', inset: 0, padding: '0.375rem 0.75rem', pointerEvents: 'none', color: '#94a3b8', fontSize: '0.875rem'}}>마감일</div>}
+                              {patient.deadline && <div className="mono" style={{position: 'absolute', inset: 0, padding: '0.375rem 0.75rem', pointerEvents: 'none', color: '#334155', background: 'transparent', fontSize: '0.875rem'}}>{patient.deadline}</div>}
+                            </div>
+                          </td>
+                          <td style={{padding: '1rem 1.5rem'}}>
+                            {daysLeft !== null ? (
+                              <span className="mono" style={{color: daysLeftColor(daysLeft), fontWeight: 600, fontSize: '0.875rem'}}>
+                                {daysLeft < 0 ? `${Math.abs(daysLeft)}일 지연` : `D-${daysLeft}`}
+                              </span>
+                            ) : '-'}
+                          </td>
+                          <td style={{padding: '1rem 1.5rem', textAlign: 'center'}}>
+                            <button
+                              onClick={() => deleteLabPatient(patient.id)}
+                              style={{color: '#ef4444', border: 'none', background: 'none', cursor: 'pointer'}}
+                            >
+                              <Trash2 />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* 환자 현황 */}
+            <div style={{background: 'white', borderRadius: '1.5rem', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)', overflow: 'hidden'}} className="slide-in">
+              <div style={{background: 'linear-gradient(to right, #14b8a6, #10b981)', color: 'white', padding: '1.5rem'}}>
+                <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
+                  <h2 style={{fontSize: '1.5rem', fontWeight: 'bold'}}>🦷 환자 현황 ({filteredImplantPatients.length})</h2>
+                  <button
+                    onClick={() => setShowImplantForm(!showImplantForm)}
+                    style={{background: 'white', color: '#14b8a6', padding: '0.5rem 1rem', borderRadius: '0.5rem', border: 'none', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem'}}
+                  >
+                    <Plus /> 신규 등록
+                  </button>
+                </div>
+              </div>
+
+              {showImplantForm && (
+                <div style={{padding: '1.5rem', borderBottom: '1px solid #e2e8f0', background: '#f8fafc'}}>
+                  <div style={{display: 'grid', gap: '1rem'}}>
+                    <input
+                      type="text"
+                      placeholder="환자명"
+                      value={implantForm.name}
+                      onChange={(e) => setImplantForm({...implantForm, name: e.target.value})}
+                      style={{padding: '0.75rem 1rem', borderRadius: '0.75rem', border: '2px solid #cbd5e1', outline: 'none'}}
+                    />
+                    <div>
+                      <div style={{fontSize: '0.875rem', color: '#475569', marginBottom: '0.5rem', fontWeight: 600}}>상태 선택 (선택사항, 등록 후 추가 가능)</div>
+                      <div style={{display: 'flex', flexWrap: 'wrap', gap: '0.5rem'}}>
+                        {['문제', '고려(약속있음)', '고려(약속없음)', '수술예정', '보철예정', '엔도', '크라운', '기공소'].map(status => (
+                          <button
+                            key={status}
+                            onClick={() => toggleImplantStatus(status)}
+                            style={{
+                              padding: '0.5rem 1rem',
+                              borderRadius: '0.75rem',
+                              border: '2px solid',
+                              borderColor: implantForm.statuses.includes(status) ? statusColors[status] : '#cbd5e1',
+                              background: implantForm.statuses.includes(status) ? statusColors[status] : 'white',
+                              color: implantForm.statuses.includes(status) ? 'white' : '#475569',
+                              cursor: 'pointer',
+                              fontWeight: 600,
+                              fontSize: '0.875rem'
+                            }}
+                          >
+                            {status}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{position: 'relative'}}>
+                      <input
+                        type="date"
+                        value={implantForm.extractionDate}
+                        onChange={(e) => setImplantForm({...implantForm, extractionDate: e.target.value})}
+                        className="date-input"
+                        style={{width: '100%', padding: '0.75rem 1rem', borderRadius: '0.75rem', border: '2px solid #cbd5e1', outline: 'none'}}
+                      />
+                      {!implantForm.extractionDate && <div style={{position: 'absolute', inset: 0, padding: '0.75rem 1rem', pointerEvents: 'none', color: '#94a3b8'}}>발치날짜</div>}
+                      {implantForm.extractionDate && <div className="mono" style={{position: 'absolute', inset: 0, padding: '0.75rem 1rem', pointerEvents: 'none', color: '#334155', background: 'transparent', fontSize: '0.875rem'}}>{implantForm.extractionDate}</div>}
+                    </div>
+                    <div style={{position: 'relative'}}>
+                      <input
+                        type="date"
+                        value={implantForm.surgeryDate}
+                        onChange={(e) => setImplantForm({...implantForm, surgeryDate: e.target.value})}
+                        className="date-input"
+                        style={{width: '100%', padding: '0.75rem 1rem', borderRadius: '0.75rem', border: '2px solid #cbd5e1', outline: 'none'}}
+                      />
+                      {!implantForm.surgeryDate && <div style={{position: 'absolute', inset: 0, padding: '0.75rem 1rem', pointerEvents: 'none', color: '#94a3b8'}}>수술날짜</div>}
+                      {implantForm.surgeryDate && <div className="mono" style={{position: 'absolute', inset: 0, padding: '0.75rem 1rem', pointerEvents: 'none', color: '#334155', background: 'transparent', fontSize: '0.875rem'}}>{implantForm.surgeryDate}</div>}
+                    </div>
+                    <button
+                      onClick={addImplantPatient}
+                      style={{padding: '0.75rem', borderRadius: '0.75rem', background: '#14b8a6', color: 'white', border: 'none', cursor: 'pointer', fontWeight: 600}}
+                    >
+                      등록하기
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div style={{overflowX: 'auto'}}>
+                <table style={{width: '100%'}}>
+                  <thead>
+                    <tr style={{background: 'linear-gradient(to right, #14b8a6, #10b981)', color: 'white'}}>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'left', fontWeight: 600}}>환자명</th>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'left', fontWeight: 600}}>상태</th>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'left', fontWeight: 600}}>발치날짜</th>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'left', fontWeight: 600}}>수술날짜</th>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'center', fontWeight: 600}}>완료</th>
+                      <th style={{padding: '1rem 1.5rem', textAlign: 'center', fontWeight: 600}}>삭제</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredImplantPatients.map(patient => (
+                      <tr key={patient.id} style={{borderBottom: '1px solid #e2e8f0', background: patient.completed ? 'rgba(16, 185, 129, 0.1)' : 'transparent'}}>
+                        <td style={{padding: '1rem 1.5rem', fontWeight: 'bold', color: '#1e293b', opacity: patient.completed ? 0.6 : 1}}>{patient.name}</td>
+                        <td style={{padding: '1rem 1.5rem'}}>
+                          <div style={{display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center'}}>
+                            {patient.statuses && patient.statuses.length > 0 ? (
+                              <>
+                                {patient.statuses.map(status => (
+                                  <span
+                                    key={status}
+                                    style={{
+                                      padding: '0.25rem 0.75rem',
+                                      borderRadius: '0.75rem',
+                                      background: statusColors[status],
+                                      color: 'white',
+                                      fontSize: '0.875rem',
+                                      fontWeight: 600,
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '0.25rem'
+                                    }}
+                                  >
+                                    {status}
+                                    <button
+                                      onClick={() => removeImplantStatus(patient.id, status)}
+                                      style={{border: 'none', background: 'none', color: 'white', cursor: 'pointer', padding: 0, display: 'flex', opacity: 0.8}}
+                                    >
+                                      <X />
+                                    </button>
+                                  </span>
+                                ))}
+                                <select
+                                  onChange={(e) => {
+                                    if (e.target.value) {
+                                      addImplantStatus(patient.id, e.target.value);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                  style={{padding: '0.25rem 0.75rem', borderRadius: '0.75rem', border: '2px dashed #cbd5e1', color: '#475569', fontSize: '0.875rem', fontWeight: 600, cursor: 'pointer', background: 'white'}}
+                                >
+                                  <option value="">+ 상태 추가</option>
+                                  {['문제', '고려(약속있음)', '고려(약속없음)', '수술예정', '보철예정', '엔도', '크라운', '기공소']
+                                    .filter(s => !patient.statuses.includes(s))
+                                    .map(status => (
+                                      <option key={status} value={status}>{status}</option>
+                                    ))
+                                  }
+                                </select>
+                              </>
+                            ) : (
+                              <>
+                                <span style={{color: '#94a3b8', fontSize: '0.875rem'}}>상태 없음</span>
+                                <select
+                                  onChange={(e) => {
+                                    if (e.target.value) {
+                                      addImplantStatus(patient.id, e.target.value);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                  style={{padding: '0.25rem 0.75rem', borderRadius: '0.75rem', border: '2px dashed #cbd5e1', color: '#475569', fontSize: '0.875rem', fontWeight: 600, cursor: 'pointer', background: 'white'}}
+                                >
+                                  <option value="">+ 상태 추가</option>
+                                  {['문제', '고려(약속있음)', '고려(약속없음)', '수술예정', '보철예정', '엔도', '크라운', '기공소'].map(status => (
+                                    <option key={status} value={status}>{status}</option>
+                                  ))}
+                                </select>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                        <td style={{padding: '1rem 1.5rem'}}>
+                          <div style={{position: 'relative'}}>
+                            <input
+                              type="date"
+                              value={patient.extractionDate || ''}
+                              onChange={(e) => updateImplantExtractionDate(patient.id, e.target.value)}
+                              className="date-input"
+                              style={{width: '100%', padding: '0.375rem 0.75rem', borderRadius: '0.5rem', border: '1px solid #cbd5e1', outline: 'none'}}
+                            />
+                            {!patient.extractionDate && <div style={{position: 'absolute', inset: 0, padding: '0.375rem 0.75rem', pointerEvents: 'none', color: '#94a3b8', fontSize: '0.875rem'}}>발치날짜</div>}
+                            {patient.extractionDate && <div className="mono" style={{position: 'absolute', inset: 0, padding: '0.375rem 0.75rem', pointerEvents: 'none', color: '#334155', background: 'transparent', fontSize: '0.875rem'}}>{patient.extractionDate}</div>}
+                          </div>
+                        </td>
+                        <td style={{padding: '1rem 1.5rem'}}>
+                          <div style={{position: 'relative'}}>
+                            <input
+                              type="date"
+                              value={patient.surgeryDate || ''}
+                              onChange={(e) => updateImplantSurgeryDate(patient.id, e.target.value)}
+                              className="date-input"
+                              style={{width: '100%', padding: '0.375rem 0.75rem', borderRadius: '0.5rem', border: '1px solid #cbd5e1', outline: 'none'}}
+                            />
+                            {!patient.surgeryDate && <div style={{position: 'absolute', inset: 0, padding: '0.375rem 0.75rem', pointerEvents: 'none', color: '#94a3b8', fontSize: '0.875rem'}}>수술날짜</div>}
+                            {patient.surgeryDate && <div className="mono" style={{position: 'absolute', inset: 0, padding: '0.375rem 0.75rem', pointerEvents: 'none', color: '#334155', background: 'transparent', fontSize: '0.875rem'}}>{patient.surgeryDate}</div>}
+                          </div>
+                        </td>
+                        <td style={{padding: '1rem 1.5rem', textAlign: 'center'}}>
+                          <input
+                            type="checkbox"
+                            checked={patient.completed || false}
+                            onChange={() => toggleImplantComplete(patient.id)}
+                            style={{width: '1.25rem', height: '1.25rem', cursor: 'pointer'}}
+                          />
+                        </td>
+                        <td style={{padding: '1rem 1.5rem', textAlign: 'center'}}>
+                          <button
+                            onClick={() => deleteImplantPatient(patient.id)}
+                            style={{color: '#ef4444', border: 'none', background: 'none', cursor: 'pointer'}}
+                          >
+                            <Trash2 />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<DentalDashboard />, document.getElementById('root'));
+  </script>
+</body>
+</html>
