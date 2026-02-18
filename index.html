@@ -5,10 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>블레스 치과 관리 시스템</title>
   
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
-  
   <style>
     * {
       margin: 0;
@@ -72,6 +68,111 @@
       font-size: 0.875rem;
       color: #bfdbfe;
       white-space: nowrap;
+    }
+
+    .auth-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .auth-box {
+      background: white;
+      padding: 2rem;
+      border-radius: 1rem;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+      width: 100%;
+      max-width: 400px;
+      margin: 1rem;
+    }
+
+    .auth-title {
+      font-size: 1.5rem;
+      font-weight: bold;
+      color: #1e293b;
+      margin-bottom: 1.5rem;
+      text-align: center;
+    }
+
+    .auth-input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: 2px solid #e2e8f0;
+      border-radius: 0.5rem;
+      margin-bottom: 1rem;
+      font-size: 1rem;
+      outline: none;
+    }
+
+    .auth-input:focus {
+      border-color: #3b82f6;
+    }
+
+    .auth-button {
+      width: 100%;
+      padding: 0.75rem;
+      background: linear-gradient(to right, #2563eb, #06b6d4);
+      color: white;
+      border: none;
+      border-radius: 0.5rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .auth-button:hover {
+      opacity: 0.9;
+    }
+
+    .auth-error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #dc2626;
+      padding: 0.75rem;
+      border-radius: 0.5rem;
+      margin-bottom: 1rem;
+      font-size: 0.875rem;
+      display: none;
+    }
+
+    .auth-status {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+    }
+
+    .auth-status-text {
+      font-size: 0.875rem;
+      color: #bfdbfe;
+    }
+
+    .auth-logout-btn {
+      padding: 0.375rem 0.75rem;
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 0.375rem;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .auth-logout-btn:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    .hidden {
+      display: none;
     }
 
     .container {
@@ -492,6 +593,17 @@
   </style>
 </head>
 <body>
+  <!-- Login Modal -->
+  <div id="authModal" class="auth-container hidden">
+    <div class="auth-box">
+      <h2 class="auth-title">🔐 로그인</h2>
+      <div id="authError" class="auth-error"></div>
+      <input type="email" id="authEmail" class="auth-input" placeholder="이메일" autocomplete="email">
+      <input type="password" id="authPassword" class="auth-input" placeholder="비밀번호" autocomplete="current-password">
+      <button onclick="login()" class="auth-button">로그인</button>
+    </div>
+  </div>
+
   <!-- Confirmation Modal -->
   <div id="confirmModal" class="modal hidden" onclick="closeModal()">
     <div class="modal-content" onclick="event.stopPropagation()">
@@ -538,6 +650,10 @@
         <div class="header-subtitle">환자 몰입 보드</div>
       </div>
       <div class="header-stats">
+        <div id="authStatus" class="auth-status hidden">
+          <span class="auth-status-text">👤 <span id="userEmail"></span></span>
+          <button onclick="logout()" class="auth-logout-btn">로그아웃</button>
+        </div>
         <div class="header-stats-label">총 환자</div>
         <div class="header-stats-number" id="totalPatients">0</div>
         <div class="header-stats-detail">
@@ -675,21 +791,22 @@
     </div>
   </div>
 
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+
   <script>
-    // Firebase 초기화
-    const firebaseConfig = {
-      databaseURL: "https://bless-dental-default-rtdb.asia-southeast1.firebasedatabase.app"
-    };
-    
-    firebase.initializeApp(firebaseConfig);
-    const database = firebase.database();
-    
     // 데이터 저장소
     let labPatients = [];
     let implantPatients = [];
     let searchTerm = '';
     let formStatuses = []; // 폼에서 선택된 상태들
     let collapsedGroups = {}; // 접힌 그룹 상태 저장
+    let useFirebase = false; // Firebase 사용 가능 여부
+    let database = null;
+    let auth = null;
+    let currentUser = null;
 
     const statusColors = {
       '문제': '#ef4444',
@@ -745,80 +862,232 @@
       {"name":"이흥섭","statuses":["문제"],"extractionDate":"","surgeryDate":"2011-05-26","comment":"","id":1770557241015,"completed":false}
     ];
 
-    // localStorage 헬퍼
-    function loadData() {
-      // 먼저 localStorage에서 기존 데이터 확인 (마이그레이션용)
-      const localLabData = localStorage.getItem('patients_labPatients');
-      const localImplantData = localStorage.getItem('patients_implantPatients');
+    // 로그인 함수
+    function login() {
+      const email = document.getElementById('authEmail').value;
+      const password = document.getElementById('authPassword').value;
+      const errorDiv = document.getElementById('authError');
       
-      if (localLabData || localImplantData) {
-        // localStorage에 데이터가 있으면 Firebase로 마이그레이션
-        console.log('localStorage 데이터를 Firebase로 마이그레이션 중...');
-        
-        const migratedLabPatients = localLabData ? JSON.parse(localLabData) : [];
-        const migratedImplantPatients = localImplantData ? JSON.parse(localImplantData) : [];
-        
-        // Firebase에 저장
-        database.ref('patients').set({
-          labPatients: migratedLabPatients,
-          implantPatients: migratedImplantPatients.length > 0 ? migratedImplantPatients : initialImplantData
-        })
-        .then(() => {
-          console.log('마이그레이션 완료! localStorage 데이터 삭제 중...');
-          // 마이그레이션 성공 후 localStorage 삭제
-          localStorage.removeItem('patients_labPatients');
-          localStorage.removeItem('patients_implantPatients');
+      if (!email || !password) {
+        errorDiv.textContent = '이메일과 비밀번호를 입력해주세요.';
+        errorDiv.style.display = 'block';
+        return;
+      }
+      
+      auth.signInWithEmailAndPassword(email, password)
+        .then((userCredential) => {
+          currentUser = userCredential.user;
+          document.getElementById('authModal').classList.add('hidden');
+          document.getElementById('authEmail').value = '';
+          document.getElementById('authPassword').value = '';
+          errorDiv.style.display = 'none';
+          updateAuthUI();
+          console.log('✅ 로그인 성공:', currentUser.email);
           
-          labPatients = migratedLabPatients;
-          implantPatients = migratedImplantPatients.length > 0 ? migratedImplantPatients : initialImplantData;
+          // 로그인 성공 후 Firebase 데이터 로드
+          loadFirebaseData();
+        })
+        .catch((error) => {
+          console.error('로그인 실패:', error);
+          errorDiv.textContent = '로그인에 실패했습니다. 이메일과 비밀번호를 확인해주세요.';
+          errorDiv.style.display = 'block';
+        });
+    }
+
+    // 로그아웃 함수
+    function logout() {
+      auth.signOut()
+        .then(() => {
+          currentUser = null;
+          updateAuthUI();
+          console.log('✅ 로그아웃 완료');
+          
+          // 로그아웃 후 초기 데이터로 복원
+          labPatients = [];
+          implantPatients = initialImplantData;
+          render();
+          
+          // 로그인 모달 표시
+          if (useFirebase) {
+            document.getElementById('authModal').classList.remove('hidden');
+          }
+        })
+        .catch((error) => {
+          console.error('로그아웃 실패:', error);
+        });
+    }
+
+    // 인증 UI 업데이트
+    function updateAuthUI() {
+      const authStatus = document.getElementById('authStatus');
+      const userEmail = document.getElementById('userEmail');
+      
+      if (currentUser) {
+        authStatus.classList.remove('hidden');
+        userEmail.textContent = currentUser.email;
+      } else {
+        authStatus.classList.add('hidden');
+      }
+    }
+
+    // Enter 키로 로그인
+    document.addEventListener('DOMContentLoaded', () => {
+      const authEmail = document.getElementById('authEmail');
+      const authPassword = document.getElementById('authPassword');
+      
+      [authEmail, authPassword].forEach(input => {
+        input?.addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+            login();
+          }
+        });
+      });
+    });
+
+    // Firebase 초기화 시도
+    function initializeFirebase() {
+      return new Promise((resolve, reject) => {
+        try {
+          const firebaseConfig = {
+            databaseURL: "https://bless-dental-default-rtdb.asia-southeast1.firebasedatabase.app"
+          };
+          
+          firebase.initializeApp(firebaseConfig);
+          database = firebase.database();
+          auth = firebase.auth();
+          
+          // 인증 상태 변경 감지
+          auth.onAuthStateChanged((user) => {
+            if (user) {
+              currentUser = user;
+              updateAuthUI();
+              console.log('✅ 인증 상태: 로그인됨 -', user.email);
+              
+              // 자동 로그인 유지 시 Firebase 데이터 로드
+              loadFirebaseData();
+            } else {
+              currentUser = null;
+              updateAuthUI();
+              console.log('ℹ️ 인증 상태: 로그아웃됨');
+            }
+          });
+          
+          // Firebase 연결 테스트 (3초 타임아웃)
+          const timeoutId = setTimeout(() => {
+            reject(new Error('Firebase 연결 타임아웃'));
+          }, 3000);
+          
+          database.ref('.info/connected').once('value')
+            .then((snapshot) => {
+              clearTimeout(timeoutId);
+              if (snapshot.val() === true) {
+                console.log('✅ Firebase 연결 성공');
+                useFirebase = true;
+                resolve(true);
+              } else {
+                console.log('❌ Firebase 연결 실패');
+                reject(new Error('Firebase 연결 불가'));
+              }
+            })
+            .catch((error) => {
+              clearTimeout(timeoutId);
+              console.log('❌ Firebase 연결 실패:', error);
+              reject(error);
+            });
+        } catch (error) {
+          console.log('❌ Firebase 초기화 실패:', error);
+          reject(error);
+        }
+      });
+    }
+
+    // 데이터 로드
+    function loadData() {
+      initializeFirebase()
+        .then(() => {
+          // Firebase 연결 성공
+          console.log('✅ Firebase 연결 성공 - 로그인 대기 중');
+          
+          // 로그인 모달 표시
+          document.getElementById('authModal').classList.remove('hidden');
+          
+          // 일단 초기 데이터로 렌더링 (로그인 전)
+          labPatients = [];
+          implantPatients = initialImplantData;
           render();
         })
         .catch((error) => {
-          console.error('마이그레이션 실패:', error);
+          // Firebase 연결 실패 - 초기 데이터 사용
+          console.log('⚠️ Firebase 연결 실패, 초기 데이터 사용');
+          labPatients = [];
+          implantPatients = initialImplantData;
+          useFirebase = false;
           render();
         });
-      } else {
-        // localStorage에 데이터가 없으면 Firebase에서 로드
-        database.ref('patients').once('value')
-          .then((snapshot) => {
-            const data = snapshot.val();
+    }
+
+    // Firebase에서 데이터 로드 (로그인 후 호출)
+    function loadFirebaseData() {
+      if (!useFirebase || !database || !currentUser) {
+        console.log('⚠️ Firebase 데이터 로드 불가 (로그인 필요)');
+        return;
+      }
+      
+      database.ref('patients').once('value')
+        .then((snapshot) => {
+          const data = snapshot.val();
+          
+          if (data) {
+            labPatients = data.labPatients || [];
+            implantPatients = data.implantPatients || [];
             
-            if (data) {
-              labPatients = data.labPatients || [];
-              implantPatients = data.implantPatients || [];
-              
-              // implantPatients가 비어있으면 초기 데이터 사용
-              if (implantPatients.length === 0) {
-                implantPatients = initialImplantData;
-                saveData();
-              }
-            } else {
-              // 데이터가 없으면 초기 데이터 사용
-              labPatients = [];
+            // implantPatients가 비어있으면 초기 데이터 사용
+            if (implantPatients.length === 0) {
               implantPatients = initialImplantData;
               saveData();
             }
             
-            render();
-          })
-          .catch((error) => {
-            console.error('데이터 로드 실패:', error);
+            console.log('📥 Firebase에서 데이터 로드 완료');
+          } else {
+            // 데이터가 없으면 초기 데이터 사용
             labPatients = [];
             implantPatients = initialImplantData;
-            render();
-          });
-      }
+            saveData();
+            console.log('📥 초기 데이터 사용 (Firebase 데이터 없음)');
+          }
+          
+          render();
+        })
+        .catch((error) => {
+          console.error('❌ Firebase 데이터 로드 실패:', error);
+        });
     }
 
     function saveData() {
-      // Firebase에 데이터 저장
-      database.ref('patients').set({
-        labPatients: labPatients,
-        implantPatients: implantPatients
-      })
-      .catch((error) => {
-        console.error('데이터 저장 실패:', error);
-      });
+      if (useFirebase && database) {
+        if (!currentUser) {
+          console.log('⚠️ 로그인이 필요합니다. 데이터 저장 생략');
+          return;
+        }
+        
+        // Firebase에 데이터 저장
+        database.ref('patients').set({
+          labPatients: labPatients,
+          implantPatients: implantPatients
+        })
+        .then(() => {
+          console.log('💾 Firebase에 저장 완료');
+        })
+        .catch((error) => {
+          console.error('❌ Firebase 저장 실패:', error);
+          if (error.code === 'PERMISSION_DENIED') {
+            alert('⚠️ 권한이 없습니다. 로그인이 필요합니다.');
+            document.getElementById('authModal').classList.remove('hidden');
+          }
+        });
+      } else {
+        console.log('💾 Firebase 비활성화 - 저장 생략');
+      }
     }
 
     function resetData() {
