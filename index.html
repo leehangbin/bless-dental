@@ -946,15 +946,30 @@
       initializeFirebase()
         .then(() => {
           console.log('✅ Firebase 초기화 완료 - 인증 상태 확인 중');
-          // Firebase Auth가 이전 로그인 상태를 복원할 때까지 대기
+          let handled = false;
+
+          // 타임아웃: 3초 안에 onAuthStateChanged 콜백이 안 오면 로그인 모달 표시
+          const timeout = setTimeout(() => {
+            if (!handled) {
+              handled = true;
+              console.log('⏱️ 인증 확인 타임아웃 - 로그인 모달 표시');
+              labPatients = [];
+              implantPatients = initialImplantData;
+              render();
+              document.getElementById('authModal').classList.remove('hidden');
+            }
+          }, 3000);
+
           auth.onAuthStateChanged((user) => {
+            if (handled) return; // 타임아웃 이미 처리된 경우 무시
+            handled = true;
+            clearTimeout(timeout);
+
             if (user) {
-              // 이미 로그인된 상태 (이전에 이 브라우저에서 로그인한 적 있음)
               console.log('✅ 자동 로그인 완료 - 데이터 로드');
               isUnlocked = true;
               loadFirebaseData();
             } else {
-              // 이 브라우저에서 처음 접속
               console.log('🔐 로그인 필요');
               labPatients = [];
               implantPatients = initialImplantData;
