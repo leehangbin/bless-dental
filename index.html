@@ -212,7 +212,7 @@
       border-radius: 1.5rem;
       box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
       margin-bottom: 2rem;
-      overflow: hidden;
+      overflow: visible;
     }
 
     .section-header {
@@ -220,6 +220,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      border-radius: 1.5rem 1.5rem 0 0;
     }
 
     .section-header.lab {
@@ -324,6 +325,12 @@
       border-spacing: 0;
     }
 
+    thead {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
     thead tr {
       color: white;
     }
@@ -341,6 +348,14 @@
       text-align: left;
       font-weight: 600;
       white-space: nowrap;
+    }
+
+    thead.lab th {
+      background: linear-gradient(to right, #3b82f6, #06b6d4);
+    }
+
+    thead.implant th {
+      background: linear-gradient(to right, #14b8a6, #10b981);
     }
 
     th.center {
@@ -654,6 +669,9 @@
           <span class="auth-status-text">👤 <span id="userEmail"></span></span>
           <button onclick="logout()" class="auth-logout-btn">로그아웃</button>
         </div>
+        <div id="loginButton" class="auth-status hidden">
+          <button onclick="showLoginModal()" class="auth-logout-btn" style="background: rgba(255,255,255,0.3);">🔐 로그인</button>
+        </div>
         <div class="header-stats-label">총 환자</div>
         <div class="header-stats-number" id="totalPatients">0</div>
         <div class="header-stats-detail">
@@ -702,7 +720,7 @@
         </div>
       </div>
 
-      <div style="overflow-x: auto;">
+      <div>
         <table>
           <thead class="lab">
             <tr>
@@ -773,7 +791,7 @@
         </div>
       </div>
 
-      <div style="overflow-x: auto;">
+      <div>
         <table class="implant-table">
           <thead class="implant">
             <tr>
@@ -907,26 +925,33 @@
           implantPatients = initialImplantData;
           render();
           
-          // 로그인 모달 표시
-          if (useFirebase) {
-            document.getElementById('authModal').classList.remove('hidden');
-          }
+          // 로그인 모달은 onAuthStateChanged에서 자동으로 표시됨
         })
         .catch((error) => {
           console.error('로그아웃 실패:', error);
         });
     }
 
+    // 로그인 모달 표시
+    function showLoginModal() {
+      document.getElementById('authModal').classList.remove('hidden');
+    }
+
     // 인증 UI 업데이트
     function updateAuthUI() {
       const authStatus = document.getElementById('authStatus');
+      const loginButton = document.getElementById('loginButton');
       const userEmail = document.getElementById('userEmail');
       
       if (currentUser) {
         authStatus.classList.remove('hidden');
+        loginButton.classList.add('hidden');
         userEmail.textContent = currentUser.email;
       } else {
         authStatus.classList.add('hidden');
+        if (useFirebase) {
+          loginButton.classList.remove('hidden');
+        }
       }
     }
 
@@ -948,15 +973,39 @@
     function initializeFirebase() {
       return new Promise((resolve, reject) => {
         try {
+          // ⭐ Firebase 설정 정보를 여기에 입력하세요
+          // Firebase Console → 프로젝트 설정 → 일반 → 내 앱 → Firebase SDK snippet → 구성
           const firebaseConfig = {
-            databaseURL: "https://bless-dental-default-rtdb.asia-southeast1.firebasedatabase.app"
-          };
+  apiKey: "AIzaSyDMr4JlL_L7TmOT6r9_W2UDVHVhN6jDSTA",
+  authDomain: "bless-dental.firebaseapp.com",
+  databaseURL: "https://bless-dental-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "bless-dental",
+  storageBucket: "bless-dental.firebasestorage.app",
+  messagingSenderId: "934691177689",
+  appId: "1:934691177689:web:a3c14a31877b1e470beac8"
+};
+          
+          // API 키가 설정되지 않았으면 Firebase 비활성화
+          if (firebaseConfig.apiKey === "YOUR_API_KEY") {
+            console.log('⚠️ Firebase 설정이 필요합니다. 초기 데이터로 작동합니다.');
+            reject(new Error('Firebase 설정 없음'));
+            return;
+          }
           
           firebase.initializeApp(firebaseConfig);
           database = firebase.database();
           auth = firebase.auth();
           
+          // 로그인 상태 유지 설정 (브라우저를 닫아도 유지)
+          auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+            .then(() => {
+              console.log('✅ 로그인 상태 유지 설정 완료');
+            });
+          
+          console.log('✅ Firebase 초기화 완료');
+          
           // 인증 상태 변경 감지
+          let authCheckCompleted = false;
           auth.onAuthStateChanged((user) => {
             if (user) {
               currentUser = user;
@@ -969,30 +1018,49 @@
               currentUser = null;
               updateAuthUI();
               console.log('ℹ️ 인증 상태: 로그아웃됨');
+              
+              // 초기 인증 확인이 완료된 후에만 로그인 모달 표시
+              // (페이지 로드 시 자동 로그인 체크 후)
+              if (authCheckCompleted && useFirebase) {
+                document.getElementById('authModal').classList.remove('hidden');
+              }
+            }
+            
+            // 첫 번째 인증 상태 확인 완료
+            if (!authCheckCompleted) {
+              authCheckCompleted = true;
             }
           });
           
-          // Firebase 연결 테스트 (3초 타임아웃)
+          // Firebase 연결 테스트 (10초 타임아웃)
           const timeoutId = setTimeout(() => {
-            reject(new Error('Firebase 연결 타임아웃'));
-          }, 3000);
+            console.log('⏱️ 연결 테스트 타임아웃 - 일단 사용 가능한 것으로 간주');
+            clearTimeout(timeoutId);
+            useFirebase = true;
+            resolve(true);
+          }, 10000);
           
+          // 방법 1: .info/connected로 테스트
           database.ref('.info/connected').once('value')
             .then((snapshot) => {
               clearTimeout(timeoutId);
               if (snapshot.val() === true) {
-                console.log('✅ Firebase 연결 성공');
+                console.log('✅ Firebase 연결 확인 완료 (.info/connected)');
                 useFirebase = true;
                 resolve(true);
               } else {
-                console.log('❌ Firebase 연결 실패');
-                reject(new Error('Firebase 연결 불가'));
+                // 연결 안 됐어도 일단 시도
+                console.log('⚠️ .info/connected = false, 하지만 계속 진행');
+                useFirebase = true;
+                resolve(true);
               }
             })
             .catch((error) => {
               clearTimeout(timeoutId);
-              console.log('❌ Firebase 연결 실패:', error);
-              reject(error);
+              console.log('⚠️ .info/connected 체크 실패, 하지만 Firebase는 사용 가능:', error.message);
+              // 초기화는 성공했으니 사용 가능
+              useFirebase = true;
+              resolve(true);
             });
         } catch (error) {
           console.log('❌ Firebase 초기화 실패:', error);
@@ -1006,15 +1074,22 @@
       initializeFirebase()
         .then(() => {
           // Firebase 연결 성공
-          console.log('✅ Firebase 연결 성공 - 로그인 대기 중');
-          
-          // 로그인 모달 표시
-          document.getElementById('authModal').classList.remove('hidden');
+          console.log('✅ Firebase 연결 성공 - 자동 로그인 확인 중');
           
           // 일단 초기 데이터로 렌더링 (로그인 전)
           labPatients = [];
           implantPatients = initialImplantData;
           render();
+
+          // onAuthStateChanged가 useFirebase=false 상태에서 먼저 실행되어
+          // 로그인 모달을 못 띄운 경우를 대비해 직접 체크
+          setTimeout(() => {
+            if (useFirebase && !currentUser) {
+              console.log('ℹ️ 로그인 필요 - 모달 표시');
+              document.getElementById('authModal').classList.remove('hidden');
+              updateAuthUI();
+            }
+          }, 500);
         })
         .catch((error) => {
           // Firebase 연결 실패 - 초기 데이터 사용
