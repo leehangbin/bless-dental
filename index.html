@@ -929,19 +929,10 @@
           firebase.initializeApp(firebaseConfig);
           database = firebase.database();
           auth = firebase.auth();
-          // setPersistence 완료 후 resolve (순서 보장)
-          auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
-            .then(() => {
-              console.log('✅ Firebase 초기화 완료');
-              useFirebase = true;
-              resolve(true);
-            })
-            .catch((error) => {
-              // setPersistence 실패해도 계속 진행
-              console.log('⚠️ setPersistence 실패, 계속 진행:', error);
-              useFirebase = true;
-              resolve(true);
-            });
+          // LOCAL이 기본값이므로 setPersistence 불필요
+          console.log('✅ Firebase 초기화 완료');
+          useFirebase = true;
+          resolve(true);
 
         } catch (error) {
           console.log('❌ Firebase 초기화 실패:', error);
