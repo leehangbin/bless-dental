@@ -957,9 +957,32 @@
       });
     });
 
+    // Firebase 연결 가능 여부 확인
+    async function checkFirebaseConnection() {
+      try {
+        const res = await fetch(
+          `${FB_DB_URL}/.json?shallow=true`,
+          { signal: AbortSignal.timeout(3000) }
+        );
+        return res.status !== 0;
+      } catch(e) {
+        return false;
+      }
+    }
+
     // 데이터 로드 (페이지 시작 시)
     async function loadData() {
-      // localStorage에 refreshToken 있으면 자동 로그인
+      // Firebase 연결 확인 (3초 타임아웃)
+      const connected = await checkFirebaseConnection();
+      if (!connected) {
+        console.log('⚠️ Firebase 연결 불가 - 로컬 데이터 사용');
+        labPatients = [];
+        implantPatients = initialImplantData;
+        render();
+        return;
+      }
+
+      // 연결 가능 → localStorage에 refreshToken 있으면 자동 로그인
       const idToken = await getIdToken();
       if (idToken) {
         console.log('✅ 자동 로그인 - 데이터 로드');
