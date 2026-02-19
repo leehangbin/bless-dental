@@ -803,10 +803,6 @@
     </div>
   </div>
 
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
   
   <script>
     // 데이터 저장소
@@ -815,10 +811,12 @@
     let searchTerm = '';
     let formStatuses = []; // 폼에서 선택된 상태들
     let collapsedGroups = {}; // 접힌 그룹 상태 저장
-    let useFirebase = false; // Firebase 사용 가능 여부
-    let database = null;
-    let auth = null;
-    let isUnlocked = false; // 잠금 해제 여부
+    // Firebase REST API 설정
+    const FB_API_KEY = 'AIzaSyDMr4JlL_L7TmOT6r9_W2UDVHVhN6jDSTA';
+    const FB_DB_URL = 'https://bless-dental-default-rtdb.asia-southeast1.firebasedatabase.app';
+    const FB_EMAIL   = 'hangb22n@naver.com';
+
+    let isUnlocked = false;
 
 
     const statusColors = {
@@ -877,10 +875,40 @@
 
 
 
-    // 로그인
-    function login() {
+    // ── Firebase REST API 인증 ──
+
+    // 저장된 idToken 가져오기 (만료 시 자동 갱신)
+    async function getIdToken() {
+      const expiry = parseInt(localStorage.getItem('bless_tokenExpiry') || '0');
+      if (Date.now() < expiry) {
+        return localStorage.getItem('bless_idToken');
+      }
+      // 만료됐으면 refreshToken으로 갱신
+      const refreshToken = localStorage.getItem('bless_refreshToken');
+      if (!refreshToken) return null;
+      try {
+        const res = await fetch(
+          `https://securetoken.googleapis.com/v1/token?key=${FB_API_KEY}`,
+          { method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `grant_type=refresh_token&refresh_token=${refreshToken}` }
+        );
+        const data = await res.json();
+        if (data.id_token) {
+          localStorage.setItem('bless_idToken', data.id_token);
+          localStorage.setItem('bless_refreshToken', data.refresh_token);
+          localStorage.setItem('bless_tokenExpiry', Date.now() + 3500000); // ~58분
+          return data.id_token;
+        }
+      } catch(e) {}
+      return null;
+    }
+
+    // 로그인 (Firebase Auth REST API → 즉시 응답)
+    async function login() {
       const password = document.getElementById('authPassword').value;
-      const errorDiv = document.getElementById('authError');
+      const errorDiv  = document.getElementById('authError');
+      const btn = document.querySelector('.auth-button');
 
       if (!password) {
         errorDiv.textContent = '비밀번호를 입력해주세요.';
@@ -888,21 +916,38 @@
         return;
       }
 
-      errorDiv.style.display = 'none';
-      // 입력한 비밀번호를 Firebase에 직접 전달 (소스코드에 비밀번호 없음)
-      auth.signInWithEmailAndPassword('hangb22n@naver.com', password)
-        .then(() => {
-          console.log('✅ 로그인 완료');
+      btn.textContent = '확인 중...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FB_API_KEY}`,
+          { method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: FB_EMAIL, password, returnSecureToken: true }) }
+        );
+        const data = await res.json();
+
+        if (data.idToken) {
+          // 토큰 저장 (자동 로그인용)
+          localStorage.setItem('bless_idToken', data.idToken);
+          localStorage.setItem('bless_refreshToken', data.refreshToken);
+          localStorage.setItem('bless_tokenExpiry', Date.now() + 3500000);
+          errorDiv.style.display = 'none';
           document.getElementById('authModal').classList.add('hidden');
           isUnlocked = true;
           loadFirebaseData();
-        })
-        .catch((error) => {
-          console.error('로그인 실패:', error);
-          errorDiv.textContent = '비밀번호가 틀렸습니다.';
-          errorDiv.style.display = 'block';
-          document.getElementById('authPassword').value = '';
-        });
+        } else {
+          throw new Error(data.error?.message || 'INVALID_PASSWORD');
+        }
+      } catch(e) {
+        errorDiv.textContent = '비밀번호가 틀렸습니다.';
+        errorDiv.style.display = 'block';
+        document.getElementById('authPassword').value = '';
+      } finally {
+        btn.textContent = '로그인';
+        btn.disabled = false;
+      }
     }
 
     // Enter 키로 로그인
@@ -912,132 +957,75 @@
       });
     });
 
-    // Firebase 초기화 시도
-    function initializeFirebase() {
-      return new Promise((resolve, reject) => {
-        try {
-          const firebaseConfig = {
-            apiKey: "AIzaSyDMr4JlL_L7TmOT6r9_W2UDVHVhN6jDSTA",
-            authDomain: "bless-dental.firebaseapp.com",
-            databaseURL: "https://bless-dental-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "bless-dental",
-            storageBucket: "bless-dental.firebasestorage.app",
-            messagingSenderId: "934691177689",
-            appId: "1:934691177689:web:a3c14a31877b1e470beac8"
-          };
-
-          firebase.initializeApp(firebaseConfig);
-          database = firebase.database();
-          auth = firebase.auth();
-          // LOCAL이 기본값이므로 setPersistence 불필요
-          console.log('✅ Firebase 초기화 완료');
-          useFirebase = true;
-          resolve(true);
-
-        } catch (error) {
-          console.log('❌ Firebase 초기화 실패:', error);
-          reject(error);
-        }
-      });
+    // 데이터 로드 (페이지 시작 시)
+    async function loadData() {
+      // localStorage에 refreshToken 있으면 자동 로그인
+      const idToken = await getIdToken();
+      if (idToken) {
+        console.log('✅ 자동 로그인 - 데이터 로드');
+        isUnlocked = true;
+        loadFirebaseData();
+      } else {
+        console.log('🔐 로그인 필요');
+        labPatients = [];
+        implantPatients = initialImplantData;
+        render();
+        document.getElementById('authModal').classList.remove('hidden');
+      }
     }
 
-    // 데이터 로드
-    function loadData() {
-      initializeFirebase()
-        .then(() => {
-          console.log('✅ Firebase 초기화 완료 - 인증 상태 확인 중');
-          let handled = false;
-
-          // 타임아웃: 3초 안에 onAuthStateChanged 콜백이 안 오면 로그인 모달 표시
-          const timeout = setTimeout(() => {
-            if (!handled) {
-              handled = true;
-              console.log('⏱️ 인증 확인 타임아웃 - 로그인 모달 표시');
-              labPatients = [];
-              implantPatients = initialImplantData;
-              render();
-              document.getElementById('authModal').classList.remove('hidden');
-            }
-          }, 3000);
-
-          auth.onAuthStateChanged((user) => {
-            if (handled) return; // 타임아웃 이미 처리된 경우 무시
-            handled = true;
-            clearTimeout(timeout);
-
-            if (user) {
-              console.log('✅ 자동 로그인 완료 - 데이터 로드');
-              isUnlocked = true;
-              loadFirebaseData();
-            } else {
-              console.log('🔐 로그인 필요');
-              labPatients = [];
-              implantPatients = initialImplantData;
-              render();
-              document.getElementById('authModal').classList.remove('hidden');
-            }
-          });
-        })
-        .catch((error) => {
-          console.log('⚠️ Firebase 연결 실패, 초기 데이터 사용');
-          labPatients = [];
-          implantPatients = initialImplantData;
-          useFirebase = false;
-          render();
-        });
-    }
-
-    // Firebase에서 데이터 로드
-    function loadFirebaseData() {
-      if (!useFirebase || !database || !auth.currentUser) {
-        console.log('⚠️ Firebase 데이터 로드 불가');
+    // Firebase REST API - 데이터 로드
+    async function loadFirebaseData() {
+      const idToken = await getIdToken();
+      if (!idToken) {
+        console.log('⚠️ 토큰 없음 - 로그인 모달 표시');
+        document.getElementById('authModal').classList.remove('hidden');
         return;
       }
-      
-      database.ref('patients').once('value')
-        .then((snapshot) => {
-          const data = snapshot.val();
-          
-          if (data) {
-            labPatients = data.labPatients || [];
-            implantPatients = data.implantPatients || [];
-            
-            // implantPatients가 비어있으면 초기 데이터 사용
-            if (implantPatients.length === 0) {
-              implantPatients = initialImplantData;
-              saveData();
-            }
-            
-            console.log('📥 Firebase에서 데이터 로드 완료');
-          } else {
-            // 데이터가 없으면 초기 데이터 사용
-            labPatients = [];
+
+      try {
+        const res = await fetch(
+          `${FB_DB_URL}/patients.json?auth=${idToken}`
+        );
+        const data = await res.json();
+
+        if (data && !data.error) {
+          labPatients = data.labPatients || [];
+          implantPatients = data.implantPatients || [];
+          if (implantPatients.length === 0) {
             implantPatients = initialImplantData;
             saveData();
-            console.log('📥 초기 데이터 사용 (Firebase 데이터 없음)');
           }
-          
-          render();
-        })
-        .catch((error) => {
-          console.error('❌ Firebase 데이터 로드 실패:', error);
-        });
+          console.log('📥 데이터 로드 완료');
+        } else {
+          labPatients = [];
+          implantPatients = initialImplantData;
+          saveData();
+          console.log('📥 초기 데이터 사용');
+        }
+        render();
+      } catch(e) {
+        console.error('❌ 데이터 로드 실패:', e);
+        labPatients = [];
+        implantPatients = initialImplantData;
+        render();
+      }
     }
 
-    function saveData() {
-      if (useFirebase && database && auth.currentUser) {
-        database.ref('patients').set({
-          labPatients: labPatients,
-          implantPatients: implantPatients
-        })
-        .then(() => {
-          console.log('💾 Firebase에 저장 완료');
-        })
-        .catch((error) => {
-          console.error('❌ Firebase 저장 실패:', error);
-        });
-      } else {
-        console.log('💾 Firebase 비활성화 - 저장 생략');
+    async function saveData() {
+      const idToken = await getIdToken();
+      if (!idToken) { console.log('💾 저장 생략 - 미인증'); return; }
+
+      try {
+        await fetch(
+          `${FB_DB_URL}/patients.json?auth=${idToken}`,
+          { method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ labPatients, implantPatients }) }
+        );
+        console.log('💾 저장 완료');
+      } catch(e) {
+        console.error('❌ 저장 실패:', e);
       }
     }
 
